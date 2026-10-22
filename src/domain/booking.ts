@@ -13,19 +13,34 @@ export type BookingErrors = {
   attendees?: Record<string, { name?: string; age?: string }>
   email?: string
   guardian?: string
+  order?: string
 }
 
 export const FULL_TICKET_PRICE = 2000
 export const CHILD_TICKET_PRICE = 1000
 export const MAX_ATTENDEES = 4
 
-export function getAttendeePrice(age: string): number {
-  const parsedAge = Number(age)
-  return age !== '' && parsedAge < 14 ? CHILD_TICKET_PRICE : FULL_TICKET_PRICE
+export function parseAge(value: string): number | null {
+  const normalized = value.trim()
+  if (!/^\d+$/.test(normalized)) return null
+  const age = Number(normalized)
+  return Number.isSafeInteger(age) && age <= 120 ? age : null
 }
 
-export function calculateTotal(attendees: Attendee[]): number {
-  return attendees.reduce((total, attendee) => total + getAttendeePrice(attendee.age), 0)
+export function getAttendeePrice(age: string): number | null {
+  const parsedAge = parseAge(age)
+  if (parsedAge === null) return null
+  return parsedAge < 14 ? CHILD_TICKET_PRICE : FULL_TICKET_PRICE
+}
+
+export function calculateTotal(attendees: Attendee[]): number | null {
+  const prices = attendees.map(({ age }) => getAttendeePrice(age))
+  if (prices.some((price) => price === null)) return null
+  return prices.reduce<number>((total, price) => total + (price ?? 0), 0)
+}
+
+export function formatPrice(amount: number | null): string {
+  return amount === null ? '—' : `${amount.toLocaleString('ru-RU')} ₽`
 }
 
 export function validateBooking(booking: Booking): BookingErrors {
@@ -34,12 +49,15 @@ export function validateBooking(booking: Booking): BookingErrors {
   let hasMinor = false
   let hasAdult = false
 
+  if (booking.attendees.length < 1 || booking.attendees.length > MAX_ATTENDEES) {
+    errors.order = `В заказе должно быть от 1 до ${MAX_ATTENDEES} участников.`
+  }
+
   booking.attendees.forEach((attendee) => {
     const current: { name?: string; age?: string } = {}
     if (!attendee.name.trim()) current.name = 'Укажите имя участника.'
-    const age = Number(attendee.age)
-    if (attendee.age.trim() === '') current.age = 'Укажите возраст.'
-    else if (!Number.isInteger(age) || age < 0 || age > 120) current.age = 'Введите возраст от 0 до 120 лет.'
+    const age = parseAge(attendee.age)
+    if (age === null) current.age = 'Введите целый возраст от 0 до 120 лет.'
     else {
       if (age < 18) hasMinor = true
       if (age >= 18) hasAdult = true
@@ -52,4 +70,9 @@ export function validateBooking(booking: Booking): BookingErrors {
   if (!booking.email.trim()) errors.email = 'Укажите email для билетов.'
   else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(booking.email.trim())) errors.email = 'Проверьте формат email.'
   return errors
+}
+
+export function createDemoOrderNumber(date: Date, uuid: string): string {
+  const suffix = uuid.replaceAll('-', '').slice(0, 8).toUpperCase()
+  return `SQ-${date.getFullYear()}-${suffix}`
 }

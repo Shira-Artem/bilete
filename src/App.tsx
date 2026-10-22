@@ -1,22 +1,33 @@
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { BookingPage } from './pages/BookingPage'
 import { ConfirmationPage } from './pages/ConfirmationPage'
 import { SuccessPage } from './pages/SuccessPage'
-import { calculateTotal, validateBooking } from './domain/booking'
+import { calculateTotal, createDemoOrderNumber, formatPrice, validateBooking } from './domain/booking'
 import type { Attendee, Booking } from './domain/booking'
 
-const initialBooking: Booking = {
-  attendees: [{ id: crypto.randomUUID(), name: '', age: '' }],
-  email: '',
+function createInitialBooking(): Booking {
+  return { attendees: [{ id: crypto.randomUUID(), name: '', age: '' }], email: '' }
 }
 
 function App() {
-  const [booking, setBooking] = useState<Booking>(initialBooking)
+  const [booking, setBooking] = useState<Booking>(createInitialBooking)
   const [step, setStep] = useState<'details' | 'confirmation' | 'success'>('details')
   const [soldOut, setSoldOut] = useState(false)
   const [bookingError, setBookingError] = useState('')
   const [showValidation, setShowValidation] = useState(false)
-  const total = useMemo(() => calculateTotal(booking.attendees), [booking.attendees])
+  const [focusFirstError, setFocusFirstError] = useState(false)
+  const [orderNumber, setOrderNumber] = useState<string | null>(null)
+  const confirmingRef = useRef(false)
+  const total = calculateTotal(booking.attendees)
+
+  useLayoutEffect(() => {
+    if (!focusFirstError) return
+    const target = document.querySelector<HTMLElement>('[aria-invalid="true"]')
+      ?? document.querySelector<HTMLElement>('#booking-order-error')
+      ?? document.querySelector<HTMLElement>('#guardian-error')
+    target?.focus()
+    setFocusFirstError(false)
+  }, [focusFirstError])
 
   function updateAttendee(id: string, changes: Partial<Attendee>) {
     setBooking((current) => ({
@@ -43,37 +54,60 @@ function App() {
     const errors = validateBooking(booking)
     setShowValidation(true)
     if (Object.keys(errors).length) {
-      const firstInvalid = document.querySelector<HTMLElement>('[aria-invalid="true"]')
-      firstInvalid?.focus()
+      setFocusFirstError(true)
       return
     }
+    setBooking((current) => ({ ...current, email: current.email.trim() }))
     setBookingError('')
     setStep('confirmation')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   function confirmBooking() {
-    if (soldOut) {
-      setBookingError('Пока вы оформляли заказ, свободные места закончились. Билеты не списаны, данные заказа сохранены.')
+    if (confirmingRef.current || step !== 'confirmation') return
+
+    const errors = validateBooking(booking)
+    if (Object.keys(errors).length || total === null) {
+      setShowValidation(true)
+      setStep('details')
+      setFocusFirstError(true)
+      setBookingError('')
       return
     }
+
+    if (soldOut) {
+      setBookingError('Демо-заказ не создан: свободные места закончились. Данные сохранены — измените заказ или попробуйте ещё раз.')
+      return
+    }
+
+    confirmingRef.current = true
+    setOrderNumber(createDemoOrderNumber(new Date(), crypto.randomUUID()))
     setBookingError('')
     setStep('success')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  function toggleSoldOut() {
+    setSoldOut((value) => !value)
+    setBookingError('')
+  }
+
   function startOver() {
-    setBooking({ ...initialBooking, attendees: [{ id: crypto.randomUUID(), name: '', age: '' }] })
+    setBooking(createInitialBooking())
     setStep('details')
+    setSoldOut(false)
     setBookingError('')
     setShowValidation(false)
+    setFocusFirstError(false)
+    setOrderNumber(null)
+    confirmingRef.current = false
   }
 
   return (
     <main className="app-shell">
       <header className="topbar">
         <a className="wordmark" href="#top" aria-label="Sqoch — на главную"><span className="brand-symbol">s</span><span>sqoch</span></a>
-        <a className="help-link" href="mailto:help@sqoch.ru">Нужна помощь?</a>
+        <a className="help-link" href="#demo-note">О демо</a>
       </header>
 
       {step !== 'success' ? (
@@ -99,45 +133,44 @@ function App() {
                 <div className={`progress-step ${step === 'confirmation' ? 'current' : ''}`}><span>02</span><b>Проверка заказа</b></div>
               </div>
               {step === 'details' ? (
-                <BookingPage booking={booking} showValidation={showValidation} onUpdateAttendee={updateAttendee} onAddAttendee={addAttendee} onRemoveAttendee={removeAttendee} onEmailChange={(email) => setBooking((current) => ({ ...current, email }))} onContinue={continueToConfirmation} />
+                <BookingPage booking={booking} showValidation={showValidation} total={total} onUpdateAttendee={updateAttendee} onAddAttendee={addAttendee} onRemoveAttendee={removeAttendee} onEmailChange={(email) => setBooking((current) => ({ ...current, email }))} onContinue={continueToConfirmation} />
               ) : (
-                <ConfirmationPage booking={booking} total={total} error={bookingError} onEdit={() => { setBookingError(''); setStep('details'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onConfirm={confirmBooking} />
+                <ConfirmationPage booking={booking} total={total ?? 0} error={bookingError} soldOut={soldOut} onToggleSoldOut={toggleSoldOut} onEdit={() => { setBookingError(''); setStep('details'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onConfirm={confirmBooking} />
               )}
             </section>
 
             <aside className="order-aside" aria-label="Информация о заказе">
               <section className="price-card">
-                <div className="aside-heading"><span>ВАШ ЗАКАЗ</span><span className="secure-mark"><LockIcon /> защищено</span></div>
+                <div className="aside-heading"><span>ВАШ ЗАКАЗ</span><span className="secure-mark">ДЕМО</span></div>
                 <h2>Билеты на событие</h2>
                 <p className="aside-subtitle">24 октября · Москва</p>
                 <div className="price-divider" />
                 <div className="price-row"><span>Полный билет <small>от 14 лет</small></span><strong>2 000 ₽</strong></div>
-                <div className="price-row"><span>Детский билет <small>до 14 лет</small></span><strong>1 000 ₽</strong></div>
+                <div className="price-row"><span>Детский билет <small>младше 14 лет</small></span><strong>1 000 ₽</strong></div>
                 <div className="price-divider" />
-                <div className="total-row"><span>Итого</span><strong>{total.toLocaleString('ru-RU')} ₽</strong></div>
-                <p className="no-fees">Без скрытых комиссий</p>
+                <div className="total-row"><span>Итого</span><strong>{formatPrice(total)}</strong></div>
+                <p className="no-fees">Оплата не подключена</p>
               </section>
               <section className="trust-note"><span className="check-icon"><CheckIcon /></span><p><strong>Спокойно планируйте</strong><br />Данные можно изменить до подтверждения заказа.</p></section>
-              <section className="demo-control">
+              <section className="demo-control" id="demo-note">
                 <span className="demo-kicker">ДЕМО-СЦЕНАРИЙ</span>
-                <button type="button" className={`scenario-toggle ${soldOut ? 'active' : ''}`} onClick={() => { setSoldOut((value) => !value); setBookingError('') }} aria-pressed={soldOut}>
+                <button type="button" className={`scenario-toggle ${soldOut ? 'active' : ''}`} onClick={toggleSoldOut} aria-pressed={soldOut}>
                   <span className="toggle-track"><span /></span>
                   <span><strong>Места закончились</strong><small>{soldOut ? 'Сработает при подтверждении' : 'Проверить сценарий отказа'}</small></span>
                 </button>
-                <p>Переключи для проверки обоих вариантов оформления.</p>
+                <p>Переключи для проверки обоих вариантов. Заказ не уйдёт в реальную систему.</p>
               </section>
             </aside>
           </div>
-          <footer className="page-footer"><span>sqoch · билеты без лишнего</span><span>Оплата защищена <LockIcon /></span></footer>
+          <footer className="page-footer"><span>sqoch · билеты без лишнего</span><span>Демонстрационная версия</span></footer>
         </>
-      ) : <SuccessPage booking={booking} total={total} onStartOver={startOver} />}
+      ) : <SuccessPage booking={booking} total={total || 0} orderNumber={orderNumber ?? ''} onStartOver={startOver} />}
     </main>
   )
 }
 
 function CalendarIcon() { return <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="12" rx="2"/><path d="M6.5 3v4M13.5 3v4M3 9h14"/></svg> }
 function PinIcon() { return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 8c0 4.2-6 9-6 9S4 12.2 4 8a6 6 0 1 1 12 0Z"/><circle cx="10" cy="8" r="2"/></svg> }
-function LockIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg> }
 function CheckIcon() { return <svg viewBox="0 0 18 18" aria-hidden="true"><path d="m4 9 3.2 3.2L14 5.5"/></svg> }
 
 export default App
